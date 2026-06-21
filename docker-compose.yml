@@ -1,0 +1,22 @@
+services:
+  service:
+    build:
+      context: ../diagnosis-demo-service
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:4173').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  tests:
+    build: .
+    environment:
+      BASE_URL: http://service:4173
+      CI: "true"
+    depends_on:
+      service:
+        condition: service_healthy
+    volumes:
+      - ./test-results:/work/test-results
+      - ./playwright-report:/work/playwright-report
+      - ./artifacts:/work/artifacts

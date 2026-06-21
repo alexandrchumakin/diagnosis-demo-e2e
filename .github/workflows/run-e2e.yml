@@ -1,0 +1,246 @@
+name: Reusable Playwright E2E with AI diagnosis
+
+on:
+  workflow_call:
+    inputs:
+      service_repository:
+        description: "Repository under test, for example alexandrchumakin/diagnosis-demo-service"
+        required: true
+        type: string
+      service_ref:
+        description: "Commit SHA or ref of the service repository to test"
+        required: true
+        type: string
+      service_base_ref:
+        description: "Base SHA/ref used to produce a focused service diff for AI analysis"
+        required: false
+        type: string
+        default: ""
+      tests_repository:
+        description: "Repository containing this reusable E2E workflow and tests"
+        required: false
+        type: string
+        default: "alexandrchumakin/diagnosis-demo-e2e"
+      tests_ref:
+        description: "Ref of the E2E tests repository"
+        required: false
+        type: string
+        default: "main"
+      openai_model:
+        description: "OpenAI model used for failure analysis"
+        required: false
+        type: string
+        default: "gpt-5.5"
+      comment_on_pr:
+        description: "Create or update a PR comment with the AI diagnosis"
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      OPENAI_API_KEY:
+        required: false
+    outputs:
+      result:
+        description: "success or failure"
+        value: ${{ jobs.e2e.outputs.result }}
+
+  workflow_dispatch:
+    inputs:
+      service_repository:
+        description: "Repository under test"
+        required: true
+        type: string
+        default: "alexandrchumakin/diagnosis-demo-service"
+      service_ref:
+        description: "Service branch, tag, or SHA"
+        required: true
+        type: string
+        default: "main"
+      service_base_ref:
+        description: "Optional base ref for focused diff"
+        required: false
+        type: string
+        default: ""
+      tests_repository:
+        description: "Repository containing this reusable E2E workflow and tests"
+        required: false
+        type: string
+        default: "alexandrchumakin/diagnosis-demo-e2e"
+      tests_ref:
+        description: "E2E tests branch, tag, or SHA"
+        required: false
+        type: string
+        default: "main"
+      openai_model:
+        description: "OpenAI model used for failure analysis"
+        required: false
+        type: string
+        default: "gpt-5.5"
+      comment_on_pr:
+        description: "Create or update a PR comment with the AI diagnosis"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+  checks: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  e2e:
+    name: Run Playwright and explain failures
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      result: ${{ steps.result.outputs.result }}
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout E2E tests
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ inputs.tests_repository }}
+          ref: ${{ inputs.tests_ref }}
+          path: e2e
+
+      - name: Checkout service under test
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ inputs.service_repository }}
+          ref: ${{ inputs.service_ref }}
+          path: service
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Install E2E dependencies
+        working-directory: e2e
+        run: npm ci
+
+      - name: Start service with Docker Compose
+        env:
+          COMPOSE_PROJECT_NAME: diagnosis-demo-${{ github.run_id }}
+        run: |
+          docker compose -f service/docker-compose.yml -p "$COMPOSE_PROJECT_NAME" up --build -d
+          for _ in {1..60}; do
+            if curl -fsS http://127.0.0.1:4173 >/dev/null; then
+              echo "Service is healthy."
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose -f service/docker-compose.yml -p "$COMPOSE_PROJECT_NAME" logs --no-color
+          exit 1
+
+      - name: Run Playwright tests
+        id: tests
+        working-directory: e2e
+        env:
+          BASE_URL: http://127.0.0.1:4173
+          CI: "true"
+        run: |
+          mkdir -p artifacts
+          set +e
+          npm test 2>&1 | tee artifacts/playwright-output.log
+          test_exit_code=${PIPESTATUS[0]}
+          set -e
+          echo "exit_code=$test_exit_code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Collect service logs
+        if: always()
+        env:
+          COMPOSE_PROJECT_NAME: diagnosis-demo-${{ github.run_id }}
+        run: |
+          mkdir -p e2e/artifacts
+          docker compose -f service/docker-compose.yml -p "$COMPOSE_PROJECT_NAME" logs --no-color > e2e/artifacts/service.log || true
+
+      - name: Collect service diff
+        if: always()
+        run: |
+          mkdir -p e2e/artifacts
+          if [[ -n "${{ inputs.service_base_ref }}" ]]; then
+            git -C service diff --no-ext-diff --unified=80 "${{ inputs.service_base_ref }}..HEAD" -- . > e2e/artifacts/service.diff || true
+          else
+            git -C service show --stat --oneline --no-renames HEAD > e2e/artifacts/service.diff || true
+          fi
+
+      - name: Analyze failed tests with OpenAI
+        if: always() && steps.tests.outputs.exit_code != '0'
+        working-directory: e2e
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ inputs.openai_model }}
+        run: |
+          node scripts/analyze-failures.mjs \
+            --junit test-results/junit.xml \
+            --playwright-log artifacts/playwright-output.log \
+            --service-log artifacts/service.log \
+            --diff artifacts/service.diff \
+            --tests-dir tests \
+            --output artifacts/ai-analysis.md
+
+      - name: Publish AI diagnosis summary
+        if: always() && steps.tests.outputs.exit_code != '0'
+        run: |
+          {
+            echo "# AI failure diagnosis"
+            echo
+            cat e2e/artifacts/ai-analysis.md
+            echo
+            echo "Artifacts include Playwright report, trace/video/screenshot, JUnit XML, service logs, and service diff."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment on PR
+        if: >-
+          always() &&
+          steps.tests.outputs.exit_code != '0' &&
+          inputs.comment_on_pr &&
+          github.event_name == 'pull_request'
+        working-directory: e2e
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: node scripts/upsert-pr-comment.mjs artifacts/ai-analysis.md
+
+      - name: Upload diagnosis artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: diagnosis-demo-artifacts-${{ github.run_number }}
+          path: |
+            e2e/artifacts
+            e2e/test-results
+            e2e/playwright-report
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Stop service
+        if: always()
+        env:
+          COMPOSE_PROJECT_NAME: diagnosis-demo-${{ github.run_id }}
+        run: docker compose -f service/docker-compose.yml -p "$COMPOSE_PROJECT_NAME" down --volumes --remove-orphans
+
+      - name: Set workflow result
+        id: result
+        run: |
+          if [[ "${{ steps.tests.outputs.exit_code }}" == "0" ]]; then
+            echo "result=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=failure" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fail when E2E failed
+        if: steps.tests.outputs.exit_code != '0'
+        run: exit 1

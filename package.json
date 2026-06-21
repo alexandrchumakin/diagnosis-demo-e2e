@@ -1,0 +1,16 @@
+{
+  "name": "diagnosis-demo-e2e",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:docker": "docker compose up --build --abort-on-container-exit --exit-code-from tests",
+    "test:headed": "playwright test --headed",
+    "analyze:latest": "node scripts/analyze-failures.mjs --junit test-results/junit.xml --playwright-log artifacts/playwright-output.log --service-log artifacts/service.log --diff artifacts/service.diff --tests-dir tests --output artifacts/ai-analysis.md",
+    "analyze:local": "./scripts/collect-local-context.sh && npm run analyze:latest"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.0"
+  }
+}
