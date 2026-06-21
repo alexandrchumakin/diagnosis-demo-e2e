@@ -71,9 +71,11 @@ If `OPENAI_API_KEY` is not set, the analyzer writes a deterministic fallback sum
 The reusable workflow:
 
 1. Checks out the service PR commit.
-2. Starts the service with Docker Compose.
-3. Runs Playwright tests.
-4. Collects JUnit XML, Playwright output, service logs, and a service diff.
-5. Calls OpenAI Responses API when tests fail.
-6. Adds the AI diagnosis to the job summary and updates a PR comment.
-7. Fails the check only after the diagnosis is published.
+2. Installs E2E npm dependencies.
+3. Installs Chromium on the GitHub runner with `npx playwright install --with-deps chromium`.
+4. Starts the service with Docker Compose.
+5. Runs Playwright tests.
+6. Collects JUnit XML, Playwright output, service logs, and a service diff.
+7. Calls OpenAI Responses API when tests fail.
+8. Adds the AI diagnosis to the job summary and updates a PR comment.
+9. Fails the check only after the diagnosis is published.
