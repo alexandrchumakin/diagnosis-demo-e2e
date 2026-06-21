@@ -27,6 +27,27 @@ npm run test:docker
 
 If you only want to show the UI in a browser, start `diagnosis-demo-service` with its own `docker compose up --build` and open http://localhost:4173.
 
+## Run a Visible Browser Demo
+
+Start the service first:
+
+```bash
+cd ../diagnosis-demo-service
+docker compose up --build
+```
+
+Then run Playwright on the host in headed slow-motion mode:
+
+```bash
+cd ../diagnosis-demo-e2e
+npm run setup:browsers
+npm run test:demo
+```
+
+This uses `BASE_URL=http://localhost:4173`, opens a visible Chromium window, disables retries, and adds `slowMo` so the clicks are readable for an audience. `setup:browsers` is needed once per machine because the headed demo runs on the host, not inside the Playwright Docker image.
+
+IntelliJ IDEA users can run the shared `Playwright demo (headed slow)` run configuration after the service is started.
+
 Artifacts are written to:
 
 ```text

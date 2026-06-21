@@ -5,3 +5,7 @@ artifacts
 .env
 .DS_Store
 *.log
+!.idea/
+.idea/*
+!.idea/runConfigurations/
+!.idea/runConfigurations/*.xml

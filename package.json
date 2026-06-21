@@ -4,9 +4,11 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "setup:browsers": "playwright install chromium",
     "test": "playwright test",
     "test:docker": "docker compose up --build --abort-on-container-exit --exit-code-from tests",
     "test:headed": "playwright test --headed",
+    "test:demo": "PWDEMO=1 BASE_URL=http://localhost:4173 playwright test --headed --workers=1 --retries=0",
     "analyze:latest": "node scripts/analyze-failures.mjs --junit test-results/junit.xml --playwright-log artifacts/playwright-output.log --service-log artifacts/service.log --diff artifacts/service.diff --tests-dir tests --output artifacts/ai-analysis.md",
     "analyze:local": "./scripts/collect-local-context.sh && npm run analyze:latest"
   },
